@@ -1,0 +1,310 @@
+// ==UserScript==
+// @name         HackForums Image Scraper and Downloader with Original Filenames
+// @namespace    http://tampermonkey.net/
+// @version      5.0
+// @description  Scrape, clear, and download images from HackForums.net using original filenames.
+// @author       
+// @match        https://hackforums.net/*
+// @grant        GM_download
+// @grant        GM_addStyle
+// @connect      imgur.com
+// @connect      i.imgur.com
+// @connect      hackforums.net
+// @connect      *
+// @run-at       document-end
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // CSS Styles for the UI
+    GM_addStyle(`
+        #hf-image-scraper-ui {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(30, 30, 30, 0.95);
+            color: #f0f0f0;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            z-index: 100000;
+            font-family: Arial, sans-serif;
+            max-width: 320px;
+            width: 300px;
+        }
+        #hf-image-scraper-ui h3 {
+            margin-top: 0;
+            font-size: 18px;
+            text-align: center;
+        }
+        #hf-image-scraper-ui button {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin: 8px 0;
+            border: none;
+            border-radius: 5px;
+            background-color: #444;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #hf-image-scraper-ui button:hover {
+            background-color: #666;
+        }
+        #hf-image-scraper-ui textarea {
+            width: 100%;
+            height: 120px;
+            margin-top: 10px;
+            padding: 10px;
+            resize: vertical;
+            border-radius: 5px;
+            border: 1px solid #555;
+            background-color: #222;
+            color: #0f0;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        #hf-image-scraper-ui .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            background: none;
+            color: #f00;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        #hf-image-scraper-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #444;
+            color: #fff;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 100001;
+            font-family: Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        #hf-image-scraper-toggle:hover {
+            background-color: #666;
+        }
+        #hf-download-progress {
+            width: 100%;
+            background-color: #444;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        #hf-download-progress-bar {
+            width: 0%;
+            height: 20px;
+            background-color: #0f0;
+            border-radius: 5px;
+            text-align: center;
+            line-height: 20px;
+            color: #000;
+            font-weight: bold;
+        }
+        #hf-download-status {
+            margin-top: 5px;
+            font-size: 12px;
+            color: #ccc;
+            text-align: center;
+            white-space: pre-wrap;
+        }
+    `);
+
+    // Create Toggle Button
+    const toggleButton = document.createElement('div');
+    toggleButton.id = 'hf-image-scraper-toggle';
+    toggleButton.innerHTML = '📷 <span>Image Scraper</span>';
+    document.body.appendChild(toggleButton);
+
+    // Create the UI Container
+    const ui = document.createElement('div');
+    ui.id = 'hf-image-scraper-ui';
+    ui.style.display = 'none'; // Hidden by default
+    ui.innerHTML = `
+        <div class="close-btn" title="Close">&times;</div>
+        <h3>Image Scraper</h3>
+        <button id="hf-scrape-images">Scrape Image Links</button>
+        <button id="hf-clear-images">Clear Image Links</button>
+        <button id="hf-download-images">Download All Images</button>
+        <textarea id="hf-image-links" readonly placeholder="Image links will appear here..."></textarea>
+        <div id="hf-download-progress" style="display: none;">
+            <div id="hf-download-progress-bar">0%</div>
+        </div>
+        <div id="hf-download-status"></div>
+    `;
+    document.body.appendChild(ui);
+
+    // Select UI Elements
+    const scrapeBtn = document.getElementById('hf-scrape-images');
+    const clearBtn = document.getElementById('hf-clear-images');
+    const downloadBtn = document.getElementById('hf-download-images');
+    const textarea = document.getElementById('hf-image-links');
+    const closeBtn = ui.querySelector('.close-btn');
+    const toggleBtn = document.getElementById('hf-image-scraper-toggle');
+    const progressBarContainer = document.getElementById('hf-download-progress');
+    const progressBar = document.getElementById('hf-download-progress-bar');
+    const downloadStatus = document.getElementById('hf-download-status');
+
+    // Toggle UI Visibility
+    toggleBtn.addEventListener('click', () => {
+        ui.style.display = ui.style.display === 'none' ? 'block' : 'none';
+    });
+
+    closeBtn.addEventListener('click', () => {
+        ui.style.display = 'none';
+    });
+
+    // Function to Scrape Image Links
+    scrapeBtn.addEventListener('click', () => {
+        // Select all image elements within post bodies
+        const images = document.querySelectorAll('.post_body img.mycode_img');
+
+        const links = Array.from(images).map(img => {
+            let src = img.getAttribute('src') || img.getAttribute('data-src');
+            if (src) {
+                // Handle protocol-relative URLs
+                if (src.startsWith('//')) {
+                    src = window.location.protocol + src;
+                } else if (src.startsWith('/')) {
+                    src = window.location.origin + src;
+                } else if (!src.startsWith('http')) {
+                    src = window.location.origin + '/' + src;
+                }
+                return src;
+            }
+            return null;
+        }).filter(src => src !== null);
+
+        // Remove duplicate links
+        const uniqueLinks = [...new Set(links)];
+
+        if (uniqueLinks.length === 0) {
+            alert('No image links found.');
+            return;
+        }
+
+        textarea.value = uniqueLinks.join('\n');
+        alert(`Scraped ${uniqueLinks.length} unique image link(s).`);
+    });
+
+    // Function to Clear Image Links
+    clearBtn.addEventListener('click', () => {
+        textarea.value = '';
+        alert('Image links cleared.');
+    });
+
+    // Function to Download All Images with Progress Indicator and Original Filenames
+    downloadBtn.addEventListener('click', () => {
+        const links = textarea.value.split('\n').map(link => link.trim()).filter(link => link !== '');
+        if (links.length === 0) {
+            alert('No image links to download.');
+            return;
+        }
+
+        // Confirm with the user before downloading multiple files
+        if (!confirm(`Are you sure you want to download ${links.length} image(s)?`)) {
+            return;
+        }
+
+        // Disable the download button to prevent multiple clicks
+        downloadBtn.disabled = true;
+        downloadBtn.innerText = 'Downloading...';
+
+        // Show the progress bar
+        progressBarContainer.style.display = 'block';
+        progressBar.style.width = '0%';
+        progressBar.innerText = '0%';
+        downloadStatus.innerText = '';
+
+        // Function to download images sequentially to prevent browser overload
+        const downloadSequentially = async (links) => {
+            const usedFilenames = new Set();
+
+            for (let i = 0; i < links.length; i++) {
+                const url = links[i];
+                let filename = getFilenameFromUrl(url);
+
+                // Ensure filename is unique to avoid overwriting
+                if (usedFilenames.has(filename)) {
+                    const basename = filename.replace(/(\.[^\.]+)$/, '');
+                    const extension = filename.match(/(\.[^\.]+)$/)?.[1] || '';
+                    let counter = 1;
+                    let newFilename = `${basename}(${counter})${extension}`;
+                    while (usedFilenames.has(newFilename)) {
+                        counter++;
+                        newFilename = `${basename}(${counter})${extension}`;
+                    }
+                    filename = newFilename;
+                }
+                usedFilenames.add(filename);
+
+                try {
+                    await new Promise((resolve, reject) => {
+                        GM_download({
+                            url: url,
+                            name: filename,
+                            onload: () => {
+                                resolve();
+                            },
+                            onerror: (error) => {
+                                console.error(`Failed to download ${url}:`, error);
+                                downloadStatus.innerText += `Failed to download ${filename}\n`;
+                                resolve(); // Continue with the next download
+                            }
+                        });
+                    });
+                    console.log(`Downloaded: ${url} as ${filename}`);
+                    downloadStatus.innerText += `Downloaded ${filename}\n`;
+                } catch (error) {
+                    console.error(`Error downloading ${url}:`, error);
+                    downloadStatus.innerText += `Error downloading ${filename}\n`;
+                }
+
+                // Update progress bar
+                const progress = ((i + 1) / links.length) * 100;
+                progressBar.style.width = `${progress}%`;
+                progressBar.innerText = `${Math.round(progress)}%`;
+            }
+
+            alert('All downloads have been initiated.');
+            downloadBtn.disabled = false;
+            downloadBtn.innerText = 'Download All Images';
+
+            // Hide the progress bar after completion
+            setTimeout(() => {
+                progressBarContainer.style.display = 'none';
+                progressBar.style.width = '0%';
+                progressBar.innerText = '0%';
+            }, 3000);
+        };
+
+        downloadSequentially(links);
+    });
+
+    // Helper Function to Get Filename from URL
+    function getFilenameFromUrl(url) {
+        // Extract the filename from the URL
+        let filename = url.substring(url.lastIndexOf('/') + 1).split('?')[0];
+
+        // Sanitize filename to remove invalid characters
+        filename = filename.replace(/[^a-zA-Z0-9_\.\-]/g, '_');
+
+        // If filename is empty, assign a default name
+        if (!filename) {
+            filename = 'image.jpg';
+        }
+
+        return filename;
+    }
+
+})();
